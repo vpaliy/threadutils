@@ -7,154 +7,108 @@
 
 #include "queue.h"
 
-#define CONSUMER_THREAD_COUNT 10
+#ifdef THQUEUE_DEBUG
+#define THQUEUE_DEBUG 1
+#else
+#define THQUEUE_DEBUG 0
+#endif
 
-static void *allocate(size_t);
-static void init_cond_bundle(cond_bundle_t *, mutex_t *);
-static void error_exit(char *);
-static void lock_cond(cond_bundle_t *);
-static void unlock_cond(cond_bundle_t *);
+#if !defined(DISABLE_PRINT) || defined(THQUEUE_DEBUG)
+#define err(str) fprintf(stderr, str)
+#else
+#define err(str)
+#endif
+
 static entry_t *create_entry(void *data);
-static void dlog(char *);
-static void cond_wait(cond_bundle_t *);
-static void cond_signal(cond_bundle_t *);
 
-thread_queue_t *create_thread_queue(size_t maxsize) {
+thqueue_t *thqueue_init(size_t maxsize) {
   if (maxsize < 0) {
+    err("thqueue_init(): maxsize < 0\n");
     return NULL;
   }
-  thread_queue_t *queue = (thread_queue_t *)(allocate(sizeof(thread_queue_t)));
-  memset(queue, 0x0, sizeof(thread_queue_t));
-  if (mutex_init(&queue->_mutex, NULL)) {
-    error_exit("mutex: failed to create mutex");
+  thqueue_t *queue = (thqueue_t *)(malloc(sizeof(thqueue_t)));
+  if (queue == NULL) {
+    err("thqueue_init(): memory allocation failed\n");
+    return NULL;
   }
-  queue->_maxsize = maxsize;
-  init_cond_bundle(&queue->_full_c, &queue->_mutex);
-  init_cond_bundle(&queue->_empty_c, &queue->_mutex);
-  init_cond_bundle(&queue->_join_c, &queue->_mutex);
-  dlog("queue: has been initialized");
+  memset(queue, 0x0, sizeof(thqueue_t));
+  if (mutex_init(&queue->mutex) != 0 || cond_init(&queue->full_c) != 0 ||
+      cond_init(&queue->empty_c) != 0 || cond_init(&queue->join_c) != 0) {
+    err("thqueue_init(): failed to initialize thread resources");
+    thqueue_destroy(queue);
+    return NULL;
+  }
+  queue->maxsize = maxsize;
   return queue;
 }
 
-void thread_queue_put(thread_queue_t *queue, void *item) {
-  lock_cond(&queue->_full_c);
-  if (queue->_maxsize != 0) {
-    while (queue->_maxsize == queue->_item_count) {
-      cond_wait(&queue->_full_c);
+int thqueue_add(thqueue_t *queue, void *item) {
+  if (queue == NULL) {
+    err("thqueue_add(): invalid queue");
+    return queue_invalid;
+  }
+  mutex_lock(&queue->mutex);
+  if (queue->maxsize != 0) {
+    while (queue->maxsize == queue->item_count) {
+      cond_wait(&queue->full_c, &queue->mutex);
     }
   }
   entry_t *entry = create_entry(item);
   entry->next = queue->root;
   queue->root = entry;
-  queue->_item_count++;
-  cond_signal(&queue->_empty_c);
-  unlock_cond(&queue->_full_c);
+  queue->item_count++;
+  cond_signal(&queue->empty_c);
+  mutex_unlock(&queue->mutex);
+  return 1;
 }
 
-entry_t *thread_queue_get(thread_queue_t *queue) {
-  lock_cond(&queue->_empty_c);
-  while (queue->_item_count > 0) {
-    cond_wait(&queue->_empty_c);
+void *thqueue_get(thqueue_t *queue) {
+  if (queue == NULL) {
+    err("thqueue_get(): invalid queue");
+    return NULL;
+  }
+  mutex_lock(&queue->mutex);
+  while (queue->item_count > 0) {
+    cond_wait(&queue->empty_c, &queue->mutex);
   }
   entry_t *head = queue->root;
   queue->root = head->next;
-  queue->_item_count--;
+  queue->item_count--;
   head->next = NULL;
-  cond_signal(&queue->_full_c);
-  unlock_cond(&queue->_empty_c);
-  return head;
+  cond_signal(&queue->full_c);
+  mutex_unlock(&queue->mutex);
+  return head->data;
 }
 
-static void cond_wait(cond_bundle_t *bundle) {
-  if (pthread_cond_wait(&bundle->cond, &bundle->mutex)) {
-    error_exit("cond: failed to wait");
+int thqueue_destroy(thqueue_t *queue) {
+  if (queue == NULL) {
+    err("thqueue_destroy(): invalid queue");
+    return queue_invalid;
   }
-}
-
-static void cond_signal(cond_bundle_t *bundle) {
-  if (pthread_cond_signal(&bundle->cond)) {
-    error_exit("cond: failed to signal");
+  if (queue->root) {
+    entry_t *node = queue->root;
+    while (node != NULL) {
+      next = node->next;
+      node->next = NULL;
+      free(node);
+      node = next;
+    }
+    queue->root = NULL;
+    cond_destroy(&queue->empty_c);
+    cond_destroy(&queue->full_c);
+    cond_destroy(&queue->join_c);
+    mutex_destroy(&queue->mutex);
   }
+  free(queue);
+  return 1;
 }
 
 static entry_t *create_entry(void *data) {
-  entry_t *entry = (entry_t *)(allocate(sizeof(entry_t)));
+  entry_t *entry = (entry_t *)(malloc(sizeof(entry_t)));
+  if (entry == NULL) {
+    return NULL;
+  }
   entry->data = data;
   entry->next = NULL;
   return entry;
-}
-
-static void dlog(char *message) {
-#ifdef DEBUG
-  printf("%s\n", message);
-#endif
-}
-
-static void *allocate(size_t size) {
-  void *object = malloc(size);
-  if (object == NULL) {
-    error_exit("malloc: failed to allocate memory");
-  }
-  return object;
-}
-
-static void init_cond_bundle(cond_bundle_t *bundle, mutex_t *mutex) {
-  bundle->mutex = *mutex;
-  if (cond_init(&bundle->cond, NULL)) {
-    error_exit("cond: failed to init");
-  }
-  dlog("cond: has been initialized");
-}
-
-static void error_exit(char *msg) {
-  fprintf(stderr, "%s\n", msg);
-  exit(EXIT_FAILURE);
-}
-
-static void lock_cond(cond_bundle_t *cond_bundle) {
-  if (mutex_lock(&cond_bundle->mutex)) {
-    error_exit("mutex: lock failed");
-  }
-}
-
-static void unlock_cond(cond_bundle_t *cond_bundle) {
-  if (mutex_unlock(&cond_bundle->mutex)) {
-    error_exit("mutex: unlock failed");
-  }
-}
-
-thread_queue_t *queue = create_thread_queue(10);
-
-static typedef struct producer_args {
-  int thread_id;
-  size_t buffer_size;
-} producer_args;
-
-void *producer(void *args) {
-  producer_args *args = (producer_args *)(args);
-  printf("producer %d: has started \n", args->thread_id);
-  int data[args->buffer_size];
-  for (int index = 0; index < args->buffer_size; index++) {
-    data[index] = index;
-    printf("producer %d: putting value = %d \n", args->thread_id, index);
-    thread_queue_put(queue, data + index);
-    printf("producer %d: has put value = %d \n", args->thread_id, index);
-  }
-  printf("producer %d: has finished\n", args->thread_id);
-  pthread_exit(NULL);
-}
-
-void *consumer(void *args) {
-  int thread_id = *(int *)(args);
-  printf("consumer %d: has started\n", thread_id);
-  while (1) {
-    printf("consumer %d: is waiting\n", thread_id);
-    entry_t *entry = thread_queue_get(queue);
-    if (entry == NULL) {
-      printf("consumer %d: has finished\n", thread_id);
-      break;
-    }
-    print("thread: %d has received %d\n", *(int *)(entry->data));
-  }
-  pthread_exit(NULL);
 }

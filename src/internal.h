@@ -43,7 +43,7 @@ typedef struct cond_t {
   HANDLE event;
 } cond_t;
 
-static void cond_init(cond_t *c) {
+static void cond_init(cond_t* c) {
   c->waiters_count = 0;
   InitializeCriticalSection(&c->waiters_count_lock);
   c->release_count = 0;
@@ -51,7 +51,7 @@ static void cond_init(cond_t *c) {
   c->event = CreateEvent(NULL, true, false, NULL);
 }
 
-static void cond_signal(cond_t *c) {
+static void cond_signal(cond_t* c) {
   EnterCriticalSection(&c->waiters_count_lock);
   if (c->waiters_count > c->release_count) {
     SetEvent(c->event);
@@ -61,7 +61,7 @@ static void cond_signal(cond_t *c) {
   LeaveCriticalSection(&c->waiters_count_lock);
 }
 
-static void cond_broadcast(cond_t *c) {
+static void cond_broadcast(cond_t* c) {
   EnterCriticalSection(&c->waiters_count_lock);
   if (c->waiters_count > 0) {
     SetEvent(c->event);
@@ -71,7 +71,7 @@ static void cond_broadcast(cond_t *c) {
   LeaveCriticalSection(&c->waiters_count_lock);
 }
 
-static void cond_wait(cond_t *c, mutex_t *m) {
+static void cond_wait(cond_t* c, mutex_t* m) {
   EnterCriticalSection(&c->waiters_count_lock);
 
   c->waiters_count++;
@@ -100,11 +100,10 @@ static void cond_wait(cond_t *c, mutex_t *m) {
   int release_count = --c->release_count;
   LeaveCriticalSection(&c->waiters_count_lock);
 
-  if (release_count == 0)
-    ResetEvent(c->event);
+  if (release_count == 0) ResetEvent(c->event);
 }
 
-static void cond_destroy(cond_t *c) {
+static void cond_destroy(cond_t* c) {
   DeleteCriticalSection(&c->waiters_count_lock);
   CloseHandle(c->event);
 }
@@ -116,15 +115,20 @@ static void cond_destroy(cond_t *c) {
 #include <pthread.h>
 
 #define thread_t pthread_t
+
 #define mutex_t pthread_mutex_t
-#define cond_t pthread_cond_t
 #define mutex_attr_t pthread_mutexattr_t
-#define cond_attr_t pthread_condattr_t
-#define mutex_init pthread_mutex_init
-#define cond_init pthread_cond_init
+#define mutex_init(m) pthread_mutex_init((m), NULL)
 #define mutex_lock pthread_mutex_lock
 #define mutex_unlock pthread_mutex_unlock
 #define mutex_destroy pthread_mutex_destroy
+
+#define cond_t pthread_cond_t
+#define cond_init(c) pthread_cond_init((c), NULL)
+#define cond_wait(c, m) pthread_cond_wait((c), (m))
+#define cond_attr_t pthread_condattr_t
+#define cond_signal pthread_cond_signal
+#define cond_broadcast pthread_cond_broadcast
 #define cond_destroy pthread_cond_destroy
 
 #endif

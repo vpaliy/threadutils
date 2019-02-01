@@ -7,31 +7,33 @@
 extern "C" {
 #endif
 
-typedef struct cond_bundle_t {
-  mutex_t mutex;
-  cond_t cond;
-} cond_bundle_t;
+typedef enum {
+  queue_invalid = -1,
+  queue_lock_failure = -2,
+  queue_full = -3,
+  queue_thread_failure = -5,
+  queue_memory_allocation = -6
+} queue_error_t;
 
 typedef struct entry_t {
   struct entry_t *next;
   void *data;
 } entry_t;
 
-typedef struct thread_queue_t {
-  cond_bundle_t _full_c;
-  cond_bundle_t _empty_c;
-  cond_bundle_t _join_c;
-  mutex_t _mutex;
-  size_t _maxsize;
-  size_t _item_count;
+typedef struct thqueue_t {
+  cond_t full_c;
+  cond_t empty_c;
+  cond_t join_c;
+  mutex_t mutex;
+  volatile size_t maxsize;
+  volatile size_t item_count;
   entry_t *root;
-} thread_queue_t;
+} thqueue_t;
 
-void destroy_thread_queue(thread_queue_t *);
-void destroy_entry(entry_t *);
-void thread_queue_put(thread_queue_t *, void *);
-entry_t *thread_queue_get(thread_queue_t *);
-thread_queue_t *create_thread_queue();
+thqueue_t *thqueue_init(size_t);
+int thqueue_destroy(thqueue_t *);
+int thqueue_add(thqueue_t *, void *);
+void *thqueue_get(thqueue_t *);
 
 #ifdef __cplusplus
 }
